@@ -1,0 +1,322 @@
+import os
+from torchvision.datasets import ImageFolder
+from torchvision.transforms import transforms
+from torch.utils.data import DataLoader
+from sklearn.model_selection import train_test_split
+import shutil
+import torch
+import torch.nn.functional as F
+import torchvision.models as models
+from torch import nn, optim
+from tqdm import tqdm
+
+import torch
+
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+    print(f"GPU is available. Using {torch.cuda.get_device_name(0)}")
+else:
+    device = torch.device("cpu")
+    print("GPU not available. Using CPU")
+
+dataset_directory = 'D:\\Alzheimer Dataset\\Alzheimer_MRI_4_classes_dataset'
+classes = os.listdir(dataset_directory)
+
+total_images = 0
+for class_name in classes:
+    class_directory = os.path.join(dataset_directory, class_name)
+    if os.path.isdir(class_directory):
+        files = os.listdir(class_directory)
+        num_files = len(files)
+        print(f"Number of files in class '{class_name}': {num_files}")
+        total_images += num_files
+
+print(f"Total instances of images: {total_images}")
+
+from torchvision import datasets, transforms
+dataset = datasets.ImageFolder(root=dataset_directory)
+
+X = [img for img, label in dataset]
+y = [label for img, label in dataset]
+
+
+import numpy as np
+from imblearn.over_sampling import ADASYN
+from PIL import Image
+
+def apply_adasyn(X, y):
+    X_arrays = [np.array(img) for img in X]
+    
+    img_shape = X_arrays[0].shape
+    
+    X_reshaped = np.array([x.flatten() for x in X_arrays])
+    
+    adasyn = ADASYN(random_state=42)
+    
+    X_resampled, y_resampled = adasyn.fit_resample(X_reshaped, y)
+
+    X_balanced = [x.reshape(img_shape) for x in X_resampled]
+    
+    X_balanced = [Image.fromarray(x.astype('uint8')) for x in X_balanced]
+    
+    return X_balanced, y_resampled
+
+X_balanced, y_balanced = apply_adasyn(X, y)
+
+len(X_balanced)
+
+transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+
+from sklearn.model_selection import train_test_split
+
+X_train, X_test, y_train, y_test = train_test_split(X_balanced, y_balanced, test_size=0.2, random_state=42, stratify=y_balanced)
+X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.125, stratify=y_train, random_state=42)
+
+print(f"Training set size: {len(X_train)}")
+print(f"Validation set size: {len(X_val)}")
+print(f"Test set size: {len(X_test)}")
+
+from torch.utils.data import Dataset
+
+class AlzheimerDataset(Dataset):
+    def __init__(self, images, labels, transform=None):
+        self.images = images
+        self.labels = labels
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, idx):
+        image = self.images[idx]
+        label = self.labels[idx]
+        
+        if self.transform:
+            image = self.transform(image)
+        
+        return image, label
+train_dataset = AlzheimerDataset(X_train, y_train, transform=transform)
+val_dataset = AlzheimerDataset(X_val, y_val, transform=transform)
+test_dataset = AlzheimerDataset(X_test, y_test, transform=transform)
+
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+
+def train_model_with_early_stopping(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs, device='cuda'):
+    best_val_loss = float('inf')
+    patience = 5
+    counter = 0
+    
+    for epoch in range(num_epochs):
+        model.train()
+        train_loss = 0.0
+        train_correct = 0
+        train_total = 0
+        
+        for inputs, labels in tqdm(train_loader, desc=f'Epoch {epoch+1}/{num_epochs}'):
+            inputs, labels = inputs.to(device), labels.to(device)
+            
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            
+            train_loss += loss.item() * inputs.size(0)
+            _, predicted = outputs.max(1)
+            train_total += labels.size(0)
+            train_correct += predicted.eq(labels).sum().item()
+        
+        train_loss = train_loss / len(train_loader.dataset)
+        train_acc = train_correct / train_total
+        
+        model.eval()
+        val_loss = 0.0
+        val_correct = 0
+        val_total = 0
+        
+        with torch.no_grad():
+            for inputs, labels in val_loader:
+                inputs, labels = inputs.to(device), labels.to(device)
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+                
+                val_loss += loss.item() * inputs.size(0)
+                _, predicted = outputs.max(1)
+                val_total += labels.size(0)
+                val_correct += predicted.eq(labels).sum().item()
+        
+        val_loss = val_loss / len(val_loader.dataset)
+        val_acc = val_correct / val_total
+        
+        scheduler.step(val_loss)
+        
+        print(f'Epoch {epoch+1}/{num_epochs}')
+        print(f'Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}')
+        print(f'Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}')
+        
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save(model.state_dict(), 'D:\\Alzheimer Dataset\\best_model.pth')
+            counter = 0
+        else:
+            counter += 1
+            if counter >= patience:
+                print(f'Early stopping after {epoch+1} epochs')
+                break
+    
+    return model
+
+import timm
+from torch.utils.data import DataLoader
+from torch import nn, optim
+from tqdm import tqdm
+
+model = timm.create_model("densenet121", pretrained=True, num_classes=4)
+model = model.to('cuda')
+
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=0.0001)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3)
+
+model = train_model_with_early_stopping(
+    model=model,
+    train_loader=train_loader,
+    val_loader=val_loader,
+    optimizer=optimizer,
+    criterion=criterion,
+    scheduler=scheduler,
+    num_epochs=30,
+    device=device
+)
+
+from sklearn.metrics import classification_report, roc_auc_score, roc_curve
+import numpy as np
+
+def test_model(model, test_loader, num_classes, device='cuda'):
+    model.eval()
+    test_correct = 0
+    test_total = 0
+    all_preds = []
+    all_labels = []
+    all_probs = []  
+
+    with torch.no_grad():
+        for inputs, labels in test_loader:
+            inputs, labels = inputs.to(device), labels.to(device)
+            outputs = model(inputs)
+            _, predicted = outputs.max(1)  
+            test_total += labels.size(0)
+            test_correct += predicted.eq(labels).sum().item()
+
+            all_preds.extend(predicted.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+            all_probs.extend(outputs.softmax(dim=1).cpu().numpy())  
+
+    test_acc = test_correct / test_total
+
+    report = classification_report(all_labels, all_preds,digits=4, target_names=[f'Class {i}' for i in range(num_classes)])
+    
+    if num_classes > 2:
+        auc_score = roc_auc_score(all_labels, all_probs, multi_class='ovr')
+    else:
+        auc_score = roc_auc_score(all_labels, [prob[1] for prob in all_probs])
+
+    return test_acc, report, auc_score
+
+
+
+test_accuracy, classification_report_str, auc_score = test_model(model, test_loader, num_classes=4, device='cuda')
+
+print(f'Test Accuracy: {test_accuracy:.4f}')
+print('Classification Report:')
+print(classification_report_str)
+print(f'AUC Score: {auc_score:.4f}')
+
+import timm
+from torch.utils.data import DataLoader
+from torch import nn, optim
+from tqdm import tqdm
+
+model = timm.create_model("xception", pretrained=True, num_classes=4)
+model = model.to('cuda')
+
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=0.0001)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3)
+model = train_model_with_early_stopping(
+    model=model,
+    train_loader=train_loader,
+    val_loader=val_loader,
+    optimizer=optimizer,
+    criterion=criterion,
+    scheduler=scheduler,
+    num_epochs=30,
+    device=device
+)
+
+test_accuracy, classification_report_str, auc_score = test_model(model, test_loader, num_classes=4, device='cuda')
+
+print(f'Test Accuracy: {test_accuracy:.4f}')
+print('Classification Report:')
+print(classification_report_str)
+print(f'AUC Score: {auc_score:.4f}')
+
+import timm
+from torch.utils.data import DataLoader
+from torch import nn, optim
+from tqdm import tqdm
+
+model = timm.create_model("efficientnet_b2", pretrained=True, num_classes=4)
+model = model.to('cuda')
+
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=0.0001)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3)
+model = train_model_with_early_stopping(
+    model=model,
+    train_loader=train_loader,
+    val_loader=val_loader,
+    optimizer=optimizer,
+    criterion=criterion,
+    scheduler=scheduler,
+    num_epochs=30,
+    device=device
+)
+
+test_accuracy, classification_report_str, auc_score = test_model(model, test_loader, num_classes=4, device='cuda')
+
+print(f'Test Accuracy: {test_accuracy:.4f}')
+print('Classification Report:')
+print(classification_report_str)
+print(f'AUC Score: {auc_score:.4f}')
+
+model = models.vgg16(pretrained=True)
+model.classifier[6] = nn.Linear(in_features=model.classifier[6].in_features, out_features=4)    
+model.to(device)
+
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=0.0001)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3)
+model = train_model_with_early_stopping(
+    model=model,
+    train_loader=train_loader,
+    val_loader=val_loader,
+    optimizer=optimizer,
+    criterion=criterion,
+    scheduler=scheduler,
+    num_epochs=30,
+    device=device
+)
+test_accuracy, classification_report_str, auc_score = test_model(model, test_loader, num_classes=4, device='cuda')
+
+print(f'Test Accuracy: {test_accuracy:.4f}')
+print('Classification Report:')
+print(classification_report_str)
+print(f'AUC Score: {auc_score:.4f}')
+
