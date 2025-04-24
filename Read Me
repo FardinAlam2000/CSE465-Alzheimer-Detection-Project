@@ -1,1 +1,12 @@
 
+This Project was done using help with Tensor and Pytorch related tools.
+
+The aim was for detecing alzheimr related diseases. The code was at first intended for collab and for using large data file such as MRI Alzheimer Dataset 4 which contains over 6400 images but due to time constraints and issues it was shifted to work with CPU.
+
+The Program in Alzheimer Disease Detection (1) is modified to run Test Batches and works well with smaller batches and epochs dued to inadequote Ram Storage (8 GB) which has lead to over 52000 seconds being wasted as shown in the image dataset test file.
+
+This was only changed to run batches in Alzheimer Disease Detection (1) as it takes too long to fully process 6,400 images and although highly accurate and more adaptive it unfortunately crashes Low Ram CPU usages.
+
+The modification has atleast allowed to use the code efficiently on Anaconda - Jupyter Notebook despite crashing only when running the full code only dued to the afforemention issues (The code itself has shown no issue).
+
+The Smoother runs is still alot better and has shown the code working just fine. Alzheimer Disease Detection (2) is more or less not given the same treatment.
