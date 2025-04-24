@@ -10,3 +10,5 @@ This was only changed to run batches in Alzheimer Disease Detection (1) as it ta
 The modification has atleast allowed to use the code efficiently on Anaconda - Jupyter Notebook despite crashing only when running the full code only dued to the afforemention issues (The code itself has shown no issue).
 
 The Smoother runs is still alot better and has shown the code working just fine. Alzheimer Disease Detection (2) is more or less not given the same treatment.
+
+https://drive.google.com/file/d/1Kq0slm2GfJJpGoxU-mzEFQZmj2mCQZFP/view?usp=sharing here is the dataset
